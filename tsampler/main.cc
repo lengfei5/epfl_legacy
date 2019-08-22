@@ -1,0 +1,148 @@
+#include <vector>
+#include <fstream>
+#include <sstream>
+#include <unistd.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+
+#include "tokens.hh"
+#include "Sampler_Simplex/Sampler.h"
+#include "bamfiles.hh"
+#include "gene.hh"
+#include "output.hh"
+
+using namespace std;
+
+int main(int argc, char **argv)
+{
+	// options and arguments
+	char genes_inputfile[512];
+	char frag_inputfile[512];
+	// char *bamfiles[512]; // maximum number of bamfiles
+	double scale= 3000;
+	double alpha=1;
+	unsigned int max_transcripts=16;
+	unsigned int samples = 10000;
+	unsigned int burnin  = 1000;
+	unsigned int readlength = 101;
+	char replica[512]="";
+	bool paired = false;
+	bool only_total = false;
+	char option;
+	while ((option = getopt (argc, argv, "g:s:m:n:b:p:r:e:R:t:")) != -1)
+	switch (option)
+	{      
+	  case 'g': strcpy(genes_inputfile,optarg); 	break;
+	  case 's': scale=atof(optarg); 				break;
+	  case 'm': max_transcripts = atoi(optarg); 	break;
+	  case 'n': samples = atoi(optarg); 			break;
+	  case 'b': burnin = atoi(optarg); 				break;
+	  case 'p': alpha = atof(optarg); 				break;
+	  case 'r': readlength = atoi(optarg); 			break;
+	  case 'e':{ strcpy(frag_inputfile,optarg); paired = true; } break;
+	  case 'R': strcpy(replica,optarg);         break;
+	  case 't': only_total=true;			         break;
+	}
+	
+	unsigned int nb = argc-optind ;
+	if(nb==0) {printf("usage: %s [-g genelist][-s scale][-m max_transcripts][-n iterations][-b burnin][-p prior alpha][-r read length][-e frag distribution][-t nb replica] file1.bam file2.bam ...\n", argv[0]); exit(1);}
+
+
+	bamfiles bams(argv+optind, nb, replica);
+//	bams.printnames();
+
+	if(max_transcripts > 8*sizeof(transcript_index)){cout << "Abort: max_transcripts > " << 8*sizeof(transcript_index) << endl; exit(1);}
+
+	vector<string> genelist;
+	ifstream GENES; GENES.open(genes_inputfile);
+	string line;
+	while(getline(GENES, line)){genelist.push_back(line);}
+	
+	vector<double> fragmentlist;	
+	if (paired){
+		unsigned int id =0;
+		ifstream FRAG; FRAG.open(frag_inputfile);
+		double item;
+		while(!FRAG.eof()){
+			FRAG>>item;
+			fragmentlist.push_back(item);
+			id++;
+		}
+	}
+	//loop over genes
+	for(unsigned int ng=0; ng<genelist.size(); ++ng)
+	  {
+	    //cout<<ng<<endl;
+	    //cout<<genelist.size()<<endl;
+	    
+		vector<string> split_line;
+		TokenizeV(genelist[ng],split_line,"\t");
+		//cout<<"nb of gene is"<<" "<<genelist.size()<<endl;
+		cout<<"nb of split_line"<<" "<<split_line.size()<<endl;
+		for(vector<string>::iterator iter = split_line.begin(); iter!=split_line.end(); ++iter)
+		  {
+		    cout<<*iter<<endl;
+		  }
+		//unsigned int nt = 119;
+		//stringstream(split_line[2]) >> nt;
+		
+//		if(nt > max_transcripts && !only_total)
+//		{
+//		   cerr << "Skipping " << split_line[1] << "[nt=" << nt << "]" << endl;
+//		   continue;
+//		}
+		// instead we could take the max_transcripts longest ones
+		
+		vector<string> transcripts_input;
+	
+		TokenizeV(split_line[3],transcripts_input,",");
+	
+		gene g(split_line[1], transcripts_input, readlength,fragmentlist);
+					
+		//run the sampler
+		double *prior = new double[g.size()];
+		for(unsigned int n=0; n<g.size(); ++n) {prior[n]=alpha;}
+
+		double *prob_initial = new double[g.size()];
+		for(unsigned int n=0; n<g.size(); ++n) {prob_initial[n]=1.0 / g.size();}
+		
+		output_all result(g);
+		
+		//loop over conditions
+		
+		for(unsigned int condition = 0 ; condition!=bams.size(); ++condition) 
+		{
+							
+			g.import_reads(bams.find(condition)->second);
+			
+			output_one_condition out(g.size(), g.nreads());
+			if(only_total) {
+				result.push_back(out);
+				continue;
+			}
+
+			if (paired){
+				g.classify_paired_reads(); 
+			} 
+			else{
+		
+				g.classify_single_reads();
+			}
+//			g.print();
+		
+			sampler<gene> mysampler(&g,g.size(),scale,prior,paired);
+			mysampler.run_sampling(prob_initial, samples);
+			
+			mysampler.get_summary(burnin, out);
+			result.push_back(out);
+			
+		}
+		
+		if(only_total) {result.print_only_total(ng);}
+		if(!only_total) {result.print(ng);}
+		
+		delete [] prior;
+		delete [] prob_initial;
+	}
+}

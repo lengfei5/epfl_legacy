@@ -1,0 +1,9 @@
+How to complie it
+-------------------------------------
+Go to the directory and type:
+>make 
+
+How to run it
+-------------------------------------
+Type: 
+./runsampler Npas2 alldata.Npas2.out params.modellau.all.txt probjump.matrix out 100000 10000 100000 2000 0
